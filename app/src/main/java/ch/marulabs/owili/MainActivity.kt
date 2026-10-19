@@ -94,6 +94,13 @@ class MainActivity : ComponentActivity() {
                         save()
                     }
                 },
+                cancelDelete = { id ->
+                    val index = entries.indexOfFirst { it.id == id }
+                    if (index >= 0) {
+                        entries[index] = entries[index].copy(deleteArmed = false)
+                        save()
+                    }
+                },
                 remove = { id ->
                     val index = entries.indexOfFirst { it.id == id }
                     if (index >= 0) {
