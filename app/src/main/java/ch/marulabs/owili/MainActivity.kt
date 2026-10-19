@@ -7,6 +7,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +22,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
@@ -92,65 +98,108 @@ private fun OwiliScreen(
     toggle: (String) -> Unit,
     remove: (String) -> Unit
 ) {
-    var input by remember { mutableStateOf("") }
+    var draft by remember { mutableStateOf<String?>(null) }
+    var pullPx by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val threshold = with(density) { 88.dp.toPx() }
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+
+    LaunchedEffect(draft) {
+        if (draft != null) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
+    }
+
+    fun submit() {
+        val value = draft?.trim().orEmpty()
+        if (value.isNotEmpty()) add(value)
+        draft = null
+    }
+
     Column(
-        modifier = Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(listOf(ocean, Color(0xFF0A6672), Color(0xFF159D9F))))
+        modifier = Modifier.fillMaxSize().background(ocean)
             .statusBarsPadding().navigationBarsPadding()
     ) {
-        Spacer(Modifier.height(32.dp))
-        Text(
-            "owili", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Light,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Text(
-            "Less tapping. More flowing.", color = sand, fontSize = 13.sp,
-            modifier = Modifier.padding(start = 27.dp, bottom = 28.dp)
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                .background(Color.White.copy(alpha = 0.14f), RoundedCornerShape(14.dp))
-                .padding(start = 18.dp, end = 8.dp)
+        // Pull down here to open a new inline row, as in Clear.
+        Box(
+            modifier = Modifier.fillMaxWidth().height(104.dp)
+                .pointerInput(draft, threshold) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, drag ->
+                            if (draft == null) {
+                                change.consume()
+                                pullPx = (pullPx + drag).coerceIn(0f, threshold * 1.6f)
+                            }
+                        },
+                        onDragEnd = {
+                            if (pullPx >= threshold && draft == null) draft = ""
+                            pullPx = 0f
+                        },
+                        onDragCancel = { pullPx = 0f }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart
         ) {
+            Column(modifier = Modifier.padding(horizontal = 22.dp)) {
+                Text("owili", color = Color.White, fontSize = 43.sp, fontWeight = FontWeight.Light)
+                Text(
+                    if (pullPx >= threshold) "LOS LASSEN: NEUER EINTRAG"
+                    else "↓ HERUNTERZIEHEN: NEUER EINTRAG",
+                    color = sand, fontSize = 11.sp
+                )
+            }
+        }
+
+        if (pullPx > 1f) {
+            Box(
+                Modifier.fillMaxWidth()
+                    .height(with(density) { pullPx.toDp() }.coerceAtMost(100.dp))
+                    .background(Color(0xFF19B8AA)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (pullPx >= threshold) "+  Neuer Eintrag" else "↓",
+                    color = Color.White, fontSize = 20.sp)
+            }
+        }
+
+        if (draft != null) {
             BasicTextField(
-                value = input, onValueChange = { input = it },
-                modifier = Modifier.weight(1f).padding(vertical = 15.dp),
+                value = draft.orEmpty(),
+                onValueChange = { draft = it },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 74.dp)
+                    .background(Color(0xFFF6C78F))
+                    .padding(horizontal = 20.dp, vertical = 22.dp)
+                    .focusRequester(focusRequester),
                 singleLine = true,
-                textStyle = TextStyle(color = Color.White, fontSize = 18.sp),
-                cursorBrush = Brush.verticalGradient(listOf(sand, sand)),
+                textStyle = TextStyle(color = ocean, fontSize = 22.sp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    add(input); input = ""; keyboard?.hide()
-                }),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
                 decorationBox = { inner ->
                     Box {
-                        if (input.isEmpty()) Text("Neuer Eintrag …", color = Color.White.copy(alpha = 0.65f))
+                        if (draft.isNullOrEmpty()) Text("Was steht an?", color = ocean.copy(alpha = 0.55f))
                         inner()
                     }
                 }
             )
-            TextButton(onClick = { add(input); input = ""; keyboard?.hide() }) {
-                Text("+", color = sand, fontSize = 28.sp)
-            }
         }
-        Text(
-            "NACH RECHTS: ERLEDIGT  ·  NACH LINKS: LÖSCHEN",
-            modifier = Modifier.padding(start = 24.dp, top = 12.dp, bottom = 14.dp),
-            color = Color.White.copy(alpha = 0.65f), fontSize = 10.sp
-        )
-        if (entries.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Deine Liste beginnt hier.", color = Color.White.copy(alpha = 0.85f))
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            // Cards touch each other; the list reads as one fluid surface.
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            items(entries, key = { it.id }) { entry ->
+                OwiliEntry(entry, toggle, remove)
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(entries, key = { it.id }) { entry ->
-                    OwiliEntry(entry, toggle, remove)
+            if (entries.isEmpty() && draft == null) {
+                item {
+                    Text("Zieh oben herunter, um deine erste Zeile anzulegen.",
+                        modifier = Modifier.fillMaxWidth().padding(26.dp),
+                        color = Color.White.copy(alpha = 0.7f))
                 }
             }
         }
@@ -160,43 +209,63 @@ private fun OwiliScreen(
 @Composable
 private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (String) -> Unit) {
     val scope = rememberCoroutineScope()
-    val rotation = remember(entry.id) { Animatable(0f) }
-    val background = if (entry.done) Color(0xFF417A80) else aqua
+    var dragAngle by remember(entry.id) { mutableFloatStateOf(0f) }
+    val base = if (entry.done) Color(0xFF267E85) else Color(0xFF20B9AE)
+    // A front face with a shaded edge: unlike a flat swipe, the entire row tilts in perspective.
     Box(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp)
-            .graphicsLayer {
-                rotationY = rotation.value
-                cameraDistance = 14f * density
-            }
-            .background(background, RoundedCornerShape(12.dp))
+        modifier = Modifier.fillMaxWidth().height(78.dp)
             .pointerInput(entry.id) {
-                var totalDrag = 0f
+                var total = 0f
                 detectHorizontalDragGestures(
-                    onDragStart = { totalDrag = 0f },
-                    onHorizontalDrag = { change, drag ->
+                    onDragStart = { total = 0f },
+                    onHorizontalDrag = { change, delta ->
                         change.consume()
-                        totalDrag += drag
-                        scope.launch { rotation.snapTo((totalDrag / size.width * 55f).coerceIn(-40f, 40f)) }
+                        total += delta
+                        dragAngle = (total / size.width * 130f).coerceIn(-72f, 72f)
                     },
                     onDragEnd = {
-                        val distance = totalDrag / size.width
+                        val distance = total / size.width
+                        dragAngle = 0f
                         when {
-                            distance > 0.32f -> toggle(entry.id)
-                            distance < -0.32f -> remove(entry.id)
+                            distance >= 0.33f -> toggle(entry.id)
+                            distance <= -0.33f -> remove(entry.id)
                         }
-                        scope.launch { rotation.animateTo(0f, spring()) }
                     },
-                    onDragCancel = { scope.launch { rotation.animateTo(0f, spring()) } }
+                    onDragCancel = { dragAngle = 0f }
                 )
             }
-            .padding(horizontal = 20.dp, vertical = 23.dp),
-        contentAlignment = Alignment.CenterStart
     ) {
-        Text(
-            (if (entry.done) "✓  " else "") + entry.text,
-            fontSize = 20.sp,
-            color = if (entry.done) Color.White.copy(alpha = 0.7f) else ocean,
-            fontWeight = FontWeight.Medium
-        )
+        Box(
+            modifier = Modifier.fillMaxSize()
+                .graphicsLayer {
+                    rotationY = dragAngle
+                    cameraDistance = 9f * density
+                    transformOrigin = TransformOrigin.Center
+                }
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            if (dragAngle > 0f) base.copy(alpha = 0.65f) else base,
+                            base,
+                            if (dragAngle < 0f) base.copy(alpha = 0.65f) else base
+                        )
+                    )
+                ),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Text(
+                entry.text,
+                modifier = Modifier.padding(horizontal = 25.dp),
+                fontSize = 21.sp,
+                color = if (entry.done) Color.White.copy(alpha = 0.55f) else Color.White,
+                fontWeight = FontWeight.Normal
+            )
+            Box(Modifier.fillMaxWidth().height(1.dp).align(Alignment.BottomCenter)
+                .background(Color(0xFF004752).copy(alpha = 0.5f)))
+            if (entry.done) {
+                Text("✓", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 22.dp),
+                    color = sand, fontSize = 23.sp)
+            }
+        }
     }
 }
