@@ -112,7 +112,8 @@ private fun OwiliScreen(
     entries: List<ListEntry>,
     add: (String) -> Unit,
     toggle: (String) -> Unit,
-    remove: (String) -> Unit
+    remove: (String) -> Unit,
+    cancelDelete: (String) -> Unit
 ) {
     var draft by remember { mutableStateOf<String?>(null) }
     var pullPx by remember { mutableFloatStateOf(0f) }
