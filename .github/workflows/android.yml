@@ -15,12 +15,13 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - run: sdkmanager "platforms;android-37"
+      - run: sdkmanager "platforms;android-36"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.4.1'
+          gradle-version: '8.13'
       - run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: owili-debug-apk
           path: app/build/outputs/apk/debug/*.apk
