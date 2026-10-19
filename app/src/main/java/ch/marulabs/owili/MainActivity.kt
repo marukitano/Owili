@@ -8,6 +8,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,7 +20,18 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.geometry.Size
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.platform.LocalDensity
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Matrix
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -43,7 +55,7 @@ private val ocean = Color(0xFF073D4B)
 private val aqua = Color(0xFF29C5B9)
 private val sand = Color(0xFFF6C78F)
 
-private data class ListEntry(val id: String, val text: String, val done: Boolean = false)
+private data class ListEntry(val id: String, val text: String, val done: Boolean = false, val deleteArmed: Boolean = false)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,7 +66,7 @@ class MainActivity : ComponentActivity() {
             val array = JSONArray(prefs.getString("entries", "[]"))
             repeat(array.length()) {
                 val obj = array.getJSONObject(it)
-                initial += ListEntry(obj.getString("id"), obj.getString("text"), obj.optBoolean("done"))
+                initial += ListEntry(obj.getString("id"), obj.getString("text"), obj.optBoolean("done"), obj.optBoolean("deleteArmed"))
             }
         }
 
@@ -63,7 +75,7 @@ class MainActivity : ComponentActivity() {
             fun save() {
                 val array = JSONArray()
                 entries.forEach {
-                    array.put(JSONObject().put("id", it.id).put("text", it.text).put("done", it.done))
+                    array.put(JSONObject().put("id", it.id).put("text", it.text).put("done", it.done).put("deleteArmed", it.deleteArmed))
                 }
                 prefs.edit().putString("entries", array.toString()).apply()
             }
@@ -78,13 +90,17 @@ class MainActivity : ComponentActivity() {
                 toggle = { id ->
                     val index = entries.indexOfFirst { it.id == id }
                     if (index >= 0) {
-                        entries[index] = entries[index].copy(done = !entries[index].done)
+                        entries[index] = entries[index].copy(done = !entries[index].done, deleteArmed = false)
                         save()
                     }
                 },
                 remove = { id ->
-                    entries.removeAll { it.id == id }
-                    save()
+                    val index = entries.indexOfFirst { it.id == id }
+                    if (index >= 0) {
+                        if (entries[index].deleteArmed) entries.removeAt(index)
+                        else entries[index] = entries[index].copy(deleteArmed = true)
+                        save()
+                    }
                 }
             )
         }
@@ -193,7 +209,7 @@ private fun OwiliScreen(
             contentPadding = PaddingValues(0.dp)
         ) {
             items(entries, key = { it.id }) { entry ->
-                OwiliEntry(entry, toggle, remove)
+                OwiliEntry(entry, toggle, remove, cancelDelete)
             }
             if (entries.isEmpty() && draft == null) {
                 item {
@@ -206,65 +222,127 @@ private fun OwiliScreen(
     }
 }
 
+/**
+ * Four faces of a long square prism. Unlike a card flip, we project all four
+ * physical faces and render whichever surfaces face the viewer.
+ *
+ * Swipe right: front -> checked (bottom); swipe left: front -> red warning (top).
+ * A second left swipe on red removes the entry. Swipe right on red cancels.
+ */
 @Composable
-private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var dragAngle by remember(entry.id) { mutableFloatStateOf(0f) }
-    val base = if (entry.done) Color(0xFF267E85) else Color(0xFF20B9AE)
-    // A front face with a shaded edge: unlike a flat swipe, the entire row tilts in perspective.
-    Box(
+private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (String) -> Unit, cancelDelete: (String) -> Unit) {
+    var drag by remember(entry.id) { mutableFloatStateOf(0f) }
+    val restingAngle = when {
+        entry.deleteArmed -> -90f
+        entry.done -> 90f
+        else -> 0f
+    }
+    val angle by animateFloatAsState(
+        targetValue = (restingAngle + drag).coerceIn(-180f, 180f),
+        animationSpec = tween(durationMillis = 270),
+        label = "cubeTurn"
+    )
+    val density = LocalDensity.current
+    val textSizePx = with(density) { 21.sp.toPx() }
+
+    Canvas(
         modifier = Modifier.fillMaxWidth().height(78.dp)
-            .pointerInput(entry.id) {
+            .pointerInput(entry.id, entry.deleteArmed, entry.done) {
                 var total = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { total = 0f },
                     onHorizontalDrag = { change, delta ->
                         change.consume()
                         total += delta
-                        dragAngle = (total / size.width * 130f).coerceIn(-72f, 72f)
+                        drag = (total / size.width * 110f).coerceIn(-85f, 85f)
                     },
                     onDragEnd = {
                         val distance = total / size.width
-                        dragAngle = 0f
-                        when {
-                            distance >= 0.33f -> toggle(entry.id)
-                            distance <= -0.33f -> remove(entry.id)
+                        // Snap back on short gestures, settle on the next face on release.
+                        if (distance > 0.28f) {
+                            if (entry.deleteArmed) cancelDelete(entry.id)
+                            else toggle(entry.id)
+                        } else if (distance < -0.28f) {
+                            if (entry.done) toggle(entry.id)
+                            else remove(entry.id)
                         }
+                        drag = 0f
                     },
-                    onDragCancel = { dragAngle = 0f }
+                    onDragCancel = { drag = 0f }
                 )
             }
     ) {
-        Box(
-            modifier = Modifier.fillMaxSize()
-                .graphicsLayer {
-                    rotationY = dragAngle
-                    cameraDistance = 9f * density
-                    transformOrigin = TransformOrigin.Center
+        val width = size.width
+        val height = size.height
+        val half = height / 2f
+        val radians = angle * PI.toFloat() / 180f
+        val projection = width.coerceAtLeast(1f) * 1.8f
+
+        // Four side planes of a square tube, in counter-clockwise order.
+        data class Face(val id: Int, val corners: List<Triple<Float, Float, Float>>, val label: String, val color: Int, val strike: Boolean)
+        fun corners(y: Float, z: Float, y2: Float, z2: Float) = listOf(
+            Triple(0f, y, z), Triple(width, y, z),
+            Triple(width, y2, z2), Triple(0f, y2, z2)
+        )
+        val faces = listOf(
+            Face(0, corners(-half, half, half, half), entry.text, 0xFF20B9AE.toInt(), false),
+            Face(1, corners(half, half, half, -half), entry.text, 0xFF257F82.toInt(), true),
+            Face(2, corners(half, -half, -half, -half), entry.text, 0xFF0C5965.toInt(), false),
+            Face(3, corners(-half, -half, -half, half), "Löschen?  " + entry.text, 0xFFDC4352.toInt(), false)
+        )
+
+        fun project(p: Triple<Float, Float, Float>): Pair<Float, Float> {
+            val yy = p.second * cos(radians) - p.third * sin(radians)
+            val zz = p.second * sin(radians) + p.third * cos(radians)
+            val scale = projection / (projection - zz).coerceAtLeast(projection * 0.5f)
+            return Pair(width / 2f + (p.first - width / 2f) * scale, half + yy * scale)
+        }
+
+        drawIntoCanvas { drawCanvas ->
+            val native = drawCanvas.nativeCanvas
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+            // Draw back-to-front; the visible adjacent face meets the front at an edge.
+            faces.sortedBy { face -> face.corners.map { p ->
+                p.second * sin(radians) + p.third * cos(radians)
+            }.average() }.forEach { face ->
+                val points = face.corners.map(::project)
+                val path = Path().apply {
+                    moveTo(points[0].first, points[0].second)
+                    for (i in 1..3) lineTo(points[i].first, points[i].second)
+                    close()
                 }
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(
-                            if (dragAngle > 0f) base.copy(alpha = 0.65f) else base,
-                            base,
-                            if (dragAngle < 0f) base.copy(alpha = 0.65f) else base
-                        )
-                    )
-                ),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Text(
-                entry.text,
-                modifier = Modifier.padding(horizontal = 25.dp),
-                fontSize = 21.sp,
-                color = if (entry.done) Color.White.copy(alpha = 0.55f) else Color.White,
-                fontWeight = FontWeight.Normal
-            )
-            Box(Modifier.fillMaxWidth().height(1.dp).align(Alignment.BottomCenter)
-                .background(Color(0xFF004752).copy(alpha = 0.5f)))
-            if (entry.done) {
-                Text("✓", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 22.dp),
-                    color = sand, fontSize = 23.sp)
+                paint.color = face.color
+                paint.style = Paint.Style.FILL
+                native.drawPath(path, paint)
+                paint.color = 0x33001D26
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = with(density) { 1.dp.toPx() }
+                native.drawPath(path, paint)
+                paint.style = Paint.Style.FILL
+
+                // Map the face's text plane onto the projected quadrilateral.
+                val src = floatArrayOf(0f, 0f, width, 0f, width, height, 0f, height)
+                val dst = FloatArray(8) { index ->
+                    if (index % 2 == 0) points[index / 2].first else points[index / 2].second
+                }
+                val matrix = Matrix()
+                if (matrix.setPolyToPoly(src, 0, dst, 0, 4)) {
+                    native.save()
+                    native.concat(matrix)
+                    native.clipRect(0f, 0f, width, height)
+                    paint.style = Paint.Style.FILL
+                    paint.textSize = textSizePx
+                    paint.color = android.graphics.Color.WHITE
+                    val maxChars = (width / (textSizePx * 0.55f)).toInt().coerceAtLeast(1)
+                    val text = face.label.take(maxChars)
+                    native.drawText(text, with(density) { 24.dp.toPx() }, height / 2f + textSizePx * .35f, paint)
+                    if (face.strike) {
+                        val textWidth = paint.measureText(text)
+                        paint.strokeWidth = with(density) { 2.dp.toPx() }
+                        native.drawLine(with(density) { 24.dp.toPx() }, half, with(density) { 24.dp.toPx() } + textWidth, half, paint)
+                    }
+                    native.restore()
+                }
             }
         }
     }
