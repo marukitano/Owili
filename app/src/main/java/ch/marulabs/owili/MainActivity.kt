@@ -363,7 +363,7 @@ private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (Stri
                     if (face.strike) {
                         val textWidth = paint.measureText(text)
                         paint.strokeWidth = with(density) { 2.dp.toPx() }
-                        native.drawLine(with(density) { 24.dp.toPx() }, half, with(density) { 24.dp.toPx() } + textWidth, half, paint)
+                        native.drawLine(with(density) { 24.dp.toPx() }, halfH, with(density) { 24.dp.toPx() } + textWidth, halfH, paint)
                     }
                     native.restore()
                 }
