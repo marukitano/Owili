@@ -20,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.geometry.Size
@@ -255,6 +256,8 @@ private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (Stri
 
     Canvas(
         modifier = Modifier.fillMaxWidth().height(78.dp)
+            .zIndex(if (kotlin.math.abs(angle % 90f) > 0.5f) 10f else 0f)
+            .graphicsLayer { clip = false }
             .pointerInput(entry.id, entry.deleteArmed, entry.done) {
                 var total = 0f
                 detectHorizontalDragGestures(
