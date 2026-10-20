@@ -285,7 +285,11 @@ private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (Stri
         val halfW = width / 2f
         val halfH = height / 2f
         val radians = angle * PI.toFloat() / 180f
-        val camera = width * 3.5f
+        // Strong perspective: at 45 degrees the nearest vertical corner
+        // moves toward the viewer and grows (~1.6x); the far edge shrinks.
+        // Calibrate to the front face so the resting row stays screen-width.
+        val camera = width * 1.05f
+        val referenceDistance = camera - halfW
 
         // Four vertical faces of a prism with a square X/Z footprint.
         // Y stays constant during rotation: the prism turns LEFT/RIGHT.
@@ -311,7 +315,7 @@ private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (Stri
         fun project(p: Triple<Float, Float, Float>): Pair<Float, Float> {
             val xx = p.first * cos(radians) + p.third * sin(radians)
             val zz = rotatedZ(p)
-            val scale = camera / (camera - zz).coerceAtLeast(camera * 0.5f)
+            val scale = referenceDistance / (camera - zz).coerceAtLeast(width * 0.20f)
             return Pair(halfW + xx * scale, halfH + p.second * scale)
         }
 
