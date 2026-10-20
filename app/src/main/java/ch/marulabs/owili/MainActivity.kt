@@ -282,37 +282,53 @@ private fun OwiliEntry(entry: ListEntry, toggle: (String) -> Unit, remove: (Stri
     ) {
         val width = size.width
         val height = size.height
-        val half = height / 2f
+        val halfW = width / 2f
+        val halfH = height / 2f
         val radians = angle * PI.toFloat() / 180f
-        val projection = width.coerceAtLeast(1f) * 1.8f
+        val camera = width * 3.5f
 
-        // Four side planes of a square tube, in counter-clockwise order.
+        // Four vertical faces of a prism with a square X/Z footprint.
+        // Y stays constant during rotation: the prism turns LEFT/RIGHT.
         data class Face(val id: Int, val corners: List<Triple<Float, Float, Float>>, val label: String, val color: Int, val strike: Boolean)
-        fun corners(y: Float, z: Float, y2: Float, z2: Float) = listOf(
-            Triple(0f, y, z), Triple(width, y, z),
-            Triple(width, y2, z2), Triple(0f, y2, z2)
+        fun quad(a: Triple<Float, Float, Float>, b: Triple<Float, Float, Float>) = listOf(
+            Triple(a.first, -halfH, a.third),
+            Triple(b.first, -halfH, b.third),
+            Triple(b.first, halfH, b.third),
+            Triple(a.first, halfH, a.third)
         )
         val faces = listOf(
-            Face(0, corners(-half, half, half, half), entry.text, 0xFF20B9AE.toInt(), false),
-            Face(1, corners(half, half, half, -half), entry.text, 0xFF257F82.toInt(), true),
-            Face(2, corners(half, -half, -half, -half), entry.text, 0xFF0C5965.toInt(), false),
-            Face(3, corners(-half, -half, -half, half), "Löschen?  " + entry.text, 0xFFDC4352.toInt(), false)
+            Face(0, quad(Triple(-halfW, 0f, halfW), Triple(halfW, 0f, halfW)), entry.text, 0xFF20B9AE.toInt(), false),
+            // Positive rotation (swipe right) reveals the LEFT face.
+            Face(1, quad(Triple(-halfW, 0f, -halfW), Triple(-halfW, 0f, halfW)), entry.text, 0xFF257F82.toInt(), true),
+            Face(2, quad(Triple(halfW, 0f, -halfW), Triple(-halfW, 0f, -halfW)), entry.text, 0xFF0C5965.toInt(), false),
+            // Negative rotation (swipe left) reveals the RIGHT red face.
+            Face(3, quad(Triple(halfW, 0f, halfW), Triple(halfW, 0f, -halfW)), "Löschen?  " + entry.text, 0xFFDC4352.toInt(), false)
         )
 
+        fun rotatedZ(p: Triple<Float, Float, Float>): Float =
+            -p.first * sin(radians) + p.third * cos(radians)
+
         fun project(p: Triple<Float, Float, Float>): Pair<Float, Float> {
-            val yy = p.second * cos(radians) - p.third * sin(radians)
-            val zz = p.second * sin(radians) + p.third * cos(radians)
-            val scale = projection / (projection - zz).coerceAtLeast(projection * 0.5f)
-            return Pair(width / 2f + (p.first - width / 2f) * scale, half + yy * scale)
+            val xx = p.first * cos(radians) + p.third * sin(radians)
+            val zz = rotatedZ(p)
+            val scale = camera / (camera - zz).coerceAtLeast(camera * 0.5f)
+            return Pair(halfW + xx * scale, halfH + p.second * scale)
+        }
+
+        // Only front-facing planes belong on screen; otherwise the back side
+        // could cover the currently visible face.
+        fun isVisible(id: Int): Boolean = when (id) {
+            0 -> cos(radians) > 0.001f
+            1 -> sin(radians) > 0.001f
+            2 -> cos(radians) < -0.001f
+            else -> sin(radians) < -0.001f
         }
 
         drawIntoCanvas { drawCanvas ->
             val native = drawCanvas.nativeCanvas
             val paint = Paint(Paint.ANTI_ALIAS_FLAG)
             // Draw back-to-front; the visible adjacent face meets the front at an edge.
-            faces.sortedBy { face -> face.corners.map { p ->
-                p.second * sin(radians) + p.third * cos(radians)
-            }.average() }.forEach { face ->
+            faces.filter { isVisible(it.id) }.sortedBy { face -> face.corners.map(::rotatedZ).average() }.forEach { face ->
                 val points = face.corners.map(::project)
                 val path = Path().apply {
                     moveTo(points[0].first, points[0].second)
